@@ -51,10 +51,12 @@ def validate_xmrg_file(
     if valid.size == 0:
         return ValidationResult(False, "no valid cells", details)
 
-    if variable in ("tair", "tmax", "tmin") and meta.dtype == "int16":
+    
+    if meta.dtype == "int16" and spec.rdhm_read_divisor != 1.0:
         physical = valid / spec.rdhm_read_divisor
     else:
         physical = valid
+
 
     details.update(
         min=float(np.nanmin(physical)),
