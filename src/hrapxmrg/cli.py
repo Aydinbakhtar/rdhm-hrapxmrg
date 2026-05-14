@@ -10,6 +10,19 @@ from .pipeline import ascii_to_xmrg, xmrg_to_ascii, format_xmrg_report
 from .validate import validate_xmrg_file, scan_rdhm_log_for_missing_forcing
 from .xmrg import read_xmrg
 
+from .domain import (
+    con_header_consistency_warnings,
+    format_domain_comparison_report,
+    format_domain_report,
+    target_grid_from_ascii_template,
+    target_grid_from_con_file,
+    target_grid_from_shapefile,
+    target_grid_from_xmrg_template,
+    target_grid_from_yaml,
+    write_target_grid_yaml,
+)
+
+
 
 def cmd_inspect(args: argparse.Namespace) -> int:
     grid, meta = read_xmrg(args.path)
@@ -74,6 +87,105 @@ def cmd_scan_log(args: argparse.Namespace) -> int:
     return 0
 
 
+
+def _grid_from_domain_args(args: argparse.Namespace):
+    provided = [
+        args.ascii_template is not None,
+        args.xmrg_template is not None,
+        args.config is not None,
+        args.con is not None,
+        args.shp is not None,
+    ]
+
+    if sum(provided) != 1:
+        raise SystemExit(
+            "Provide exactly one domain source: "
+            "--ascii-template, --xmrg-template, --config, --con, or --shp"
+        )
+
+    if args.ascii_template:
+        return target_grid_from_ascii_template(args.ascii_template), f"ascii_template={args.ascii_template}"
+    if args.xmrg_template:
+        return target_grid_from_xmrg_template(args.xmrg_template), f"xmrg_template={args.xmrg_template}"
+    if args.config:
+        return target_grid_from_yaml(args.config), f"config={args.config}"
+    if args.con:
+        return target_grid_from_con_file(args.con, buffer_cells=args.buffer_cells), f"con={args.con}"
+    if args.shp:
+        return target_grid_from_shapefile(args.shp, buffer_cells=args.buffer_cells), f"shp={args.shp}"
+
+    raise AssertionError("unreachable")
+
+
+def cmd_describe_domain(args: argparse.Namespace) -> int:
+    grid, source = _grid_from_domain_args(args)
+    report = format_domain_report(grid, source=source)
+
+    if args.con:
+        warnings = con_header_consistency_warnings(args.con)
+        if warnings:
+            report += "\n\nCON header warnings:\n"
+            report += "\n".join(f"  WARNING: {w}" for w in warnings)
+
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(report + "\n", encoding="utf-8")
+        print(f"Wrote domain report: {args.output}")
+    else:
+        print(report)
+
+    return 0
+
+
+def cmd_domain_from_shp(args: argparse.Namespace) -> int:
+    grid = target_grid_from_shapefile(args.shp, buffer_cells=args.buffer_cells)
+    write_target_grid_yaml(args.output, grid, source=f"shapefile={args.shp}")
+    print(format_domain_report(grid, source=f"shapefile={args.shp}"))
+    print(f"\nWrote domain config: {args.output}")
+    return 0
+
+
+def cmd_domain_from_con(args: argparse.Namespace) -> int:
+    grid = target_grid_from_con_file(args.con, buffer_cells=args.buffer_cells)
+    write_target_grid_yaml(args.output, grid, source=f"con={args.con}")
+    print(format_domain_report(grid, source=f"con={args.con}"))
+    warnings = con_header_consistency_warnings(args.con)
+    if warnings:
+        print("\nCON header warnings:")
+        for warning in warnings:
+            print(f"  WARNING: {warning}")
+    print(f"\nWrote domain config: {args.output}")
+    return 0
+
+
+def cmd_check_domain(args: argparse.Namespace) -> int:
+    con_grid = target_grid_from_con_file(args.con, buffer_cells=0) if args.con else None
+    shp_grid = target_grid_from_shapefile(args.shp, buffer_cells=args.buffer_cells) if args.shp else None
+
+    template_grid = None
+    if args.ascii_template:
+        template_grid = target_grid_from_ascii_template(args.ascii_template)
+    elif args.xmrg_template:
+        template_grid = target_grid_from_xmrg_template(args.xmrg_template)
+    elif args.config:
+        template_grid = target_grid_from_yaml(args.config)
+
+    report = format_domain_comparison_report(
+        con_grid=con_grid,
+        shp_grid=shp_grid,
+        template_grid=template_grid,
+    )
+
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(report + "\n", encoding="utf-8")
+        print(f"Wrote domain comparison report: {args.output}")
+    else:
+        print(report)
+
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="hrapxmrg",
@@ -118,6 +230,39 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("scan-log", help="Scan RDHM log for missing forcing messages")
     p.add_argument("path", type=Path)
     p.set_defaults(func=cmd_scan_log)
+
+    p = sub.add_parser("describe-domain", help="Describe an HRAP target domain")
+    p.add_argument("--ascii-template", type=Path, default=None)
+    p.add_argument("--xmrg-template", type=Path, default=None)
+    p.add_argument("--config", type=Path, default=None)
+    p.add_argument("--con", type=Path, default=None)
+    p.add_argument("--shp", type=Path, default=None)
+    p.add_argument("--buffer-cells", type=int, default=0)
+    p.add_argument("--output", type=Path, default=None)
+    p.set_defaults(func=cmd_describe_domain)
+
+    p = sub.add_parser("domain-from-shp", help="Create HRAP domain YAML from shapefile")
+    p.add_argument("--shp", required=True, type=Path)
+    p.add_argument("--output", required=True, type=Path)
+    p.add_argument("--buffer-cells", type=int, default=0)
+    p.set_defaults(func=cmd_domain_from_shp)
+
+    p = sub.add_parser("domain-from-con", help="Create HRAP domain YAML from RDHM .con file")
+    p.add_argument("--con", required=True, type=Path)
+    p.add_argument("--output", required=True, type=Path)
+    p.add_argument("--buffer-cells", type=int, default=0)
+    p.set_defaults(func=cmd_domain_from_con)
+
+    p = sub.add_parser("check-domain", help="Compare HRAP domains from .con, shapefile, template, or config")
+    p.add_argument("--con", type=Path, default=None)
+    p.add_argument("--shp", type=Path, default=None)
+    p.add_argument("--ascii-template", type=Path, default=None)
+    p.add_argument("--xmrg-template", type=Path, default=None)
+    p.add_argument("--config", type=Path, default=None)
+    p.add_argument("--buffer-cells", type=int, default=0)
+    p.add_argument("--output", type=Path, default=None)
+    p.set_defaults(func=cmd_check_domain)
+
 
     return parser
 
