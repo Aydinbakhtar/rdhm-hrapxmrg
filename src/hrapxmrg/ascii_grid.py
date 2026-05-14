@@ -53,6 +53,15 @@ def read_ascii_grid(path: str | Path) -> AsciiGrid:
 
     nodata = header.get("nodata_value", header.get("nodata", -999.0))
 
+    if "nodata_value" in header:
+        nodata = header["nodata_value"]
+    elif "nodata" in header:
+        nodata = header["nodata"]
+    else:
+        raise ValueError(
+            f"{path}: missing nodata value in header; expected 'NODATA_value' or 'NODATA'"
+        )
+
     return AsciiGrid(
         array=data,
         ncols=ncols,
