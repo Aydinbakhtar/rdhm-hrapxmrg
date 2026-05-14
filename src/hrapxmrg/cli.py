@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-from .pipeline import ascii_to_xmrg
+from .pipeline import ascii_to_xmrg, xmrg_to_ascii, format_xmrg_report
 from .validate import validate_xmrg_file, scan_rdhm_log_for_missing_forcing
 from .xmrg import read_xmrg
 
@@ -39,11 +39,34 @@ def cmd_ascii_to_xmrg(args: argparse.Namespace) -> int:
     print(json.dumps({"ok": result.ok, "message": result.message, "details": result.details}, indent=2))
     return 0 if result.ok else 2
 
-
 def cmd_validate(args: argparse.Namespace) -> int:
     result = validate_xmrg_file(args.path, variable=args.variable)
     print(json.dumps({"ok": result.ok, "message": result.message, "details": result.details}, indent=2))
     return 0 if result.ok else 2
+
+def cmd_xmrg_to_ascii(args: argparse.Namespace) -> int:
+    xmrg_to_ascii(
+        args.input,
+        args.output,
+        args.variable,
+        orientation=args.orientation,
+        physical=not args.stored,
+    )
+    print(f"Wrote ASCII grid: {args.output}")
+    return 0
+
+
+def cmd_print_xmrg(args: argparse.Namespace) -> int:
+    report = format_xmrg_report(args.input, variable=args.variable)
+
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(report + "\n", encoding="utf-8")
+        print(f"Wrote report: {args.output}")
+    else:
+        print(report)
+
+    return 0
 
 
 def cmd_scan_log(args: argparse.Namespace) -> int:
@@ -77,6 +100,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("path", type=Path)
     p.add_argument("--variable", required=True, choices=["prep", "tair", "tmax", "tmin", "snow_ALAT"])
     p.set_defaults(func=cmd_validate)
+
+    p = sub.add_parser("xmrg-to-ascii", help="Convert XMRG to HRAP/ESRI ASCII grid")
+    p.add_argument("input", type=Path)
+    p.add_argument("--output", required=True, type=Path)
+    p.add_argument("--variable", required=True, choices=["prep", "tair", "tmax", "tmin", "snow_ALAT"])
+    p.add_argument("--orientation", choices=["as-is", "flipud"], default="flipud")
+    p.add_argument("--stored", action="store_true", help="Write stored values instead of physical values")
+    p.set_defaults(func=cmd_xmrg_to_ascii)
+
+    p = sub.add_parser("print-xmrg", help="Print or save XMRG metadata and value summary")
+    p.add_argument("input", type=Path)
+    p.add_argument("--variable", choices=["prep", "tair", "tmax", "tmin", "snow_ALAT"], default=None)
+    p.add_argument("--output", type=Path, default=None)
+    p.set_defaults(func=cmd_print_xmrg)
 
     p = sub.add_parser("scan-log", help="Scan RDHM log for missing forcing messages")
     p.add_argument("path", type=Path)
