@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hrapxmrg"
+version = "0.1.0"
+description = "HRAP/XMRG preprocessing library and CLI for HL-RDHM/RDHM hydrologic modeling"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "hrapxmrg contributors" }]
+keywords = ["RDHM", "HL-RDHM", "HRAP", "XMRG", "hydrologic modeling", "forcing"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Hydrology",
+]
+dependencies = [
+    "numpy>=1.24",
+    "click>=8.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+]
+
+[project.scripts]
+hrapxmrg = "hrapxmrg.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["hrapxmrg*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
