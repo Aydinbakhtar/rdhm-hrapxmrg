@@ -78,7 +78,7 @@ VARIABLES: dict[str, VariableSpec] = {
         valid_max=500.0,
         description="Daily precipitation; scale should be verified against working RDHM files",
     ),
-    "snow_ALAT": VariableSpec(
+    "snow_alat": VariableSpec(
         name="snow_ALAT",
         filename_prefix="snow_ALAT",
         header_type="int32",
