@@ -36,6 +36,12 @@ def _wrap_record(payload: bytes, endian: str = "<") -> bytes:
     n = len(payload)
     return struct.pack(f"{endian}i", n) + payload + struct.pack(f"{endian}i", n)
 
+def _missing_mask(arr: np.ndarray, missing: float) -> np.ndarray:
+    """Return True where arr should be written as the missing-value sentinel."""
+    if np.isnan(missing):
+        return np.isnan(arr)
+    return np.isnan(arr) | np.isclose(arr, missing)
+
 
 def read_xmrg(path: str | Path) -> tuple[np.ndarray, XMRGMeta]:
     """Read an XMRG .gz file and return (grid, metadata).
@@ -192,7 +198,8 @@ def write_xmrg(
         buf += _wrap_record(sec, "<")
 
     if dtype == "int16":
-        scaled = np.where(arr <= -900, missing, np.rint(arr * scale))
+        # scaled = np.where(arr <= -900, missing, np.rint(arr * scale))
+        scaled = np.where(_missing_mask(arr, missing), missing, np.rint(arr * scale))
         if np.nanmin(scaled) < np.iinfo(np.int16).min or np.nanmax(scaled) > np.iinfo(np.int16).max:
             raise OverflowError("scaled grid exceeds int16 range")
         stored = scaled.astype("<i2")
