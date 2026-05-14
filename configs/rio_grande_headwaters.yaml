@@ -1,0 +1,32 @@
+name: Upper Rio Grande Headwaters
+description: RDHM HRAP domain for the current Upper Rio Grande / Rio Grande Headwaters setup.
+project_root_alph: /data/aydin/project/RDHM/rdhm-prep_05
+project_root_aral: /data-alph/aydin/project/RDHM/rdhm-prep_05
+
+target_grid:
+  xor: 341
+  yor: 313
+  maxx: 64
+  maxy: 87
+  cellsize: 1
+  nodata: -999
+
+selected_basin_hrap_bounds:
+  left: 346
+  right: 397
+  bottom: 346
+  top: 397
+
+temperature_rule:
+  storage: int16
+  units: Fahrenheit
+  scale: 100
+  formula: "round((C * 9/5 + 32) * 100)"
+  note: "Project-authoritative rule from RDHM smoke test. Do not use Fx10 unless a fresh test proves it."
+
+paths_aral:
+  con: /data-alph/aydin/project/RDHM/rdhm-prep_05/con/headwaters_fd.con
+  parameter_grid: /data-alph/aydin/project/RDHM/rdhm-prep_05/channel_param/genpar/Final_param
+  precip_root: /data-alph/aydin/project/RDHM/rdhm-prep_05/forcing/obs/xmrg/prep
+  temperature_daily_root: /data-alph/aydin/project/RDHM/rdhm-prep_05/forcing/obs/xmrg_temperature_F100_daily
+  temperature_hourly_root: /data-alph/aydin/project/RDHM/rdhm-prep_05/forcing/obs/xmrg_temperature_F100_hourly
