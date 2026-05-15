@@ -9,6 +9,7 @@ from .hrap import TargetGrid
 from .variables import get_variable_spec
 from .xmrg import read_xmrg, write_xmrg
 from .validate import validate_xmrg_file, ValidationResult
+from .regrid import convert_units, reproject_raster_to_hrap
 
 
 
@@ -135,6 +136,64 @@ def format_xmrg_report(
         lines.append(" ".join(f"{v:10.2f}" for v in row))
 
     return "\n".join(lines)
+
+
+def raster_to_xmrg(
+    input_raster: str | Path,
+    output_xmrg: str | Path,
+    variable: str,
+    target_grid: TargetGrid,
+    *,
+    band: int = 1,
+    resampling: str = "bilinear",
+    source_units: str | None = None,
+    target_units: str | None = None,
+    header_type: str | None = None,
+    dtype: str | None = None,
+    scale: float | None = None,
+    orientation: str = "flipud",
+    secondary_header: bool = False,
+) -> ValidationResult:
+    """Convert source raster directly to RDHM-ready XMRG.
+
+    The source raster is reprojected to the exact trusted HRAP target grid.
+    Unit conversion is applied before XMRG scaling. The final XMRG is written
+    and then validated by readback.
+
+    Default orientation is flipud because rasterio arrays and ESRI ASCII grids
+    are north-to-south, while RDHM/asctoxmrg XMRG row order is south-to-north.
+    """
+    spec = get_variable_spec(variable)
+
+    arr = reproject_raster_to_hrap(
+        input_raster,
+        target_grid,
+        band=band,
+        resampling=resampling,
+        dst_nodata=spec.missing_value,
+    )
+
+    if source_units and target_units:
+        arr = convert_units(arr, source_units=source_units, target_units=target_units)
+
+    header_type = header_type or spec.header_type
+    dtype = dtype or spec.dtype
+    scale = spec.storage_scale if scale is None else scale
+
+    write_xmrg(
+        output_xmrg,
+        arr,
+        xor=target_grid.xor,
+        yor=target_grid.yor,
+        header_type=header_type,
+        dtype=dtype,
+        scale=scale,
+        missing=spec.missing_value,
+        secondary_header=secondary_header,
+        orientation=orientation,
+    )
+
+    return validate_xmrg_file(output_xmrg, variable=variable, target_grid=target_grid)
 
 
 
