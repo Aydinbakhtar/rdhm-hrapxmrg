@@ -1,7 +1,9 @@
 """High-level conversion pipelines."""
 
 from __future__ import annotations
+import json
 from pathlib import Path
+from datetime import datetime, timezone
 import numpy as np
 from .ascii_grid import read_ascii_grid
 from .ascii_writer import write_ascii_grid
@@ -11,6 +13,74 @@ from .xmrg import read_xmrg, write_xmrg
 from .validate import validate_xmrg_file, ValidationResult
 from .regrid import convert_units, reproject_raster_to_hrap
 
+
+def target_grid_manifest(target_grid: TargetGrid) -> dict[str, object]:
+    """Return the compact target-grid block used in JSON reports."""
+    return {
+        "xor": target_grid.xor,
+        "yor": target_grid.yor,
+        "maxx": target_grid.maxx,
+        "maxy": target_grid.maxy,
+        "urx": target_grid.x_max_hrap,
+        "ury": target_grid.y_max_hrap,
+        "cellsize": target_grid.cellsize,
+        "nodata": target_grid.nodata,
+    }
+
+
+def raster_to_xmrg_manifest(
+    *,
+    input_raster: str | Path,
+    output_xmrg: str | Path,
+    variable: str,
+    target_grid: TargetGrid,
+    validation: ValidationResult,
+    date: str | None = None,
+    hour: int | None = None,
+    daily_precip: bool = False,
+    source_units: str | None = None,
+    target_units: str | None = None,
+    target_domain_source: str | None = None,
+    header_type: str | None = None,
+    dtype: str | None = None,
+    scale: float | None = None,
+    orientation: str = "flipud",
+    secondary_header: bool = False,
+) -> dict[str, object]:
+    spec = get_variable_spec(variable)
+    header_type = header_type or spec.header_type
+    dtype = dtype or spec.dtype
+    scale = spec.storage_scale if scale is None else scale
+
+    return {
+        "input_raster": str(input_raster),
+        "output_xmrg": str(output_xmrg),
+        "variable": variable,
+        "date": date,
+        "hour": hour,
+        "daily_precip": daily_precip,
+        "source_units": source_units,
+        "target_units": target_units,
+        "target_domain_source": target_domain_source,
+        "target_grid": target_grid_manifest(target_grid),
+        "header_type": header_type,
+        "dtype": dtype,
+        "scale": scale,
+        "orientation": orientation,
+        "secondary_header": secondary_header,
+        "validation": {
+            "ok": validation.ok,
+            "message": validation.message,
+            "details": validation.details,
+        },
+        "generated_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+
+
+def write_raster_to_xmrg_manifest(path: str | Path, manifest: dict[str, object]) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def ascii_to_xmrg(
@@ -194,7 +264,6 @@ def raster_to_xmrg(
     )
 
     return validate_xmrg_file(output_xmrg, variable=variable, target_grid=target_grid)
-
 
 
 

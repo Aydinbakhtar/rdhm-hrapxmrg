@@ -67,7 +67,7 @@ VARIABLES: dict[str, VariableSpec] = {
     ),
     "prep": VariableSpec(
         name="prep",
-        filename_prefix=None,
+        filename_prefix="xmrg",
         header_type="int32",
         dtype="int16",
         storage_scale=100.0,
