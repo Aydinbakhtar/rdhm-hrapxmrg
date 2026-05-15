@@ -8,7 +8,15 @@ from pathlib import Path
 
 import numpy as np
 
-from .pipeline import ascii_to_xmrg, xmrg_to_ascii, format_xmrg_report, raster_to_xmrg
+from .filenames import rdhm_filename
+from .pipeline import (
+    ascii_to_xmrg,
+    format_xmrg_report,
+    raster_to_xmrg,
+    raster_to_xmrg_manifest,
+    write_raster_to_xmrg_manifest,
+    xmrg_to_ascii,
+)
 from .validate import validate_xmrg_file, scan_rdhm_log_for_missing_forcing
 from .xmrg import read_xmrg
 
@@ -89,6 +97,19 @@ def cmd_print_xmrg(args: argparse.Namespace) -> int:
 
 def cmd_scan_log(args: argparse.Namespace) -> int:
     print(json.dumps(scan_rdhm_log_for_missing_forcing(args.path), indent=2))
+    return 0
+
+
+def cmd_filename(args: argparse.Namespace) -> int:
+    print(
+        rdhm_filename(
+            args.variable,
+            args.date,
+            hour=args.hour,
+            daily=args.daily,
+            suffix_gz=not args.no_gzip,
+        )
+    )
     return 0
 
 
@@ -191,7 +212,7 @@ def cmd_check_domain(args: argparse.Namespace) -> int:
     return 0
 
 
-def _target_grid_from_target_args(args: argparse.Namespace):
+def _target_grid_and_source_from_target_args(args: argparse.Namespace):
     provided = [
         args.target_ascii_template is not None,
         args.target_xmrg_template is not None,
@@ -205,20 +226,26 @@ def _target_grid_from_target_args(args: argparse.Namespace):
             "Provide exactly one target domain source: "
             "--target-ascii-template, --target-xmrg-template, "
             "--target-config, --target-con, or --target-shp"
-        )
+    )
 
     if args.target_ascii_template:
-        return target_grid_from_ascii_template(args.target_ascii_template)
+        return target_grid_from_ascii_template(args.target_ascii_template), f"ascii_template={args.target_ascii_template}"
     if args.target_xmrg_template:
-        return target_grid_from_xmrg_template(args.target_xmrg_template)
+        return target_grid_from_xmrg_template(args.target_xmrg_template), f"xmrg_template={args.target_xmrg_template}"
     if args.target_config:
-        return target_grid_from_yaml(args.target_config)
+        return target_grid_from_yaml(args.target_config), f"config={args.target_config}"
     if args.target_con:
-        return target_grid_from_con_file(args.target_con, buffer_cells=args.buffer_cells)
+        return target_grid_from_con_file(args.target_con, buffer_cells=args.buffer_cells), f"con={args.target_con}"
     if args.target_shp:
-        return target_grid_from_shapefile(args.target_shp, buffer_cells=args.buffer_cells)
+        return target_grid_from_shapefile(args.target_shp, buffer_cells=args.buffer_cells), f"shp={args.target_shp}"
 
     raise AssertionError("unreachable")
+
+
+def _target_grid_from_target_args(args: argparse.Namespace):
+    target_grid, _source = _target_grid_and_source_from_target_args(args)
+    return target_grid
+
 
 def cmd_raster_to_ascii(args: argparse.Namespace) -> int:
     target_grid = _target_grid_from_target_args(args)
@@ -256,11 +283,29 @@ def cmd_raster_to_ascii(args: argparse.Namespace) -> int:
 
 
 def cmd_raster_to_xmrg(args: argparse.Namespace) -> int:
-    target_grid = _target_grid_from_target_args(args)
+    if args.output and args.output_dir:
+        raise SystemExit("Provide either --output or --output-dir, not both")
+    if not args.output and not args.output_dir:
+        raise SystemExit("Provide either --output or --output-dir")
+    if args.daily_precip and args.variable != "prep":
+        raise SystemExit("--daily-precip is only valid with --variable prep")
+
+    output_xmrg = args.output
+    if args.output_dir:
+        filename = rdhm_filename(
+            args.variable,
+            args.date,
+            hour=args.hour,
+            daily=args.daily_precip,
+            suffix_gz=not args.no_gzip_name,
+        )
+        output_xmrg = args.output_dir / filename
+
+    target_grid, target_domain_source = _target_grid_and_source_from_target_args(args)
 
     result = raster_to_xmrg(
         input_raster=args.input,
-        output_xmrg=args.output,
+        output_xmrg=output_xmrg,
         variable=args.variable,
         target_grid=target_grid,
         band=args.band,
@@ -273,6 +318,27 @@ def cmd_raster_to_xmrg(args: argparse.Namespace) -> int:
         orientation=args.orientation,
         secondary_header=args.secondary_header,
     )
+
+    if args.report:
+        manifest = raster_to_xmrg_manifest(
+            input_raster=args.input,
+            output_xmrg=output_xmrg,
+            variable=args.variable,
+            target_grid=target_grid,
+            validation=result,
+            date=args.date,
+            hour=args.hour,
+            daily_precip=args.daily_precip,
+            source_units=args.source_units,
+            target_units=args.target_units,
+            target_domain_source=target_domain_source,
+            header_type=args.header_type,
+            dtype=args.dtype,
+            scale=args.scale,
+            orientation=args.orientation,
+            secondary_header=args.secondary_header,
+        )
+        write_raster_to_xmrg_manifest(args.report, manifest)
 
     print(json.dumps({"ok": result.ok, "message": result.message, "details": result.details}, indent=2))
     return 0 if result.ok else 2
@@ -323,6 +389,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("scan-log", help="Scan RDHM log for missing forcing messages")
     p.add_argument("path", type=Path)
     p.set_defaults(func=cmd_scan_log)
+
+    p = sub.add_parser("filename", help="Print an RDHM forcing filename")
+    p.add_argument("--variable", required=True, choices=["prep", "tair", "tmax", "tmin"])
+    p.add_argument("--date", required=True)
+    p.add_argument("--hour", type=int, default=None)
+    p.add_argument("--daily", action="store_true")
+    p.add_argument("--no-gzip", action="store_true")
+    p.set_defaults(func=cmd_filename)
 
     p = sub.add_parser("describe-domain", help="Describe an HRAP target domain")
     p.add_argument("--ascii-template", type=Path, default=None)
@@ -377,7 +451,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("raster-to-xmrg", help="Reproject source raster to exact HRAP grid and write XMRG")
     p.add_argument("--input", required=True, type=Path)
-    p.add_argument("--output", required=True, type=Path)
+    p.add_argument("--output", type=Path, default=None)
+    p.add_argument("--output-dir", type=Path, default=None)
+    p.add_argument("--report", type=Path, default=None)
+    p.add_argument("--date", default=None)
+    p.add_argument("--hour", type=int, default=None)
+    p.add_argument("--daily-precip", action="store_true")
+    p.add_argument("--no-gzip-name", action="store_true")
     p.add_argument("--variable", required=True, choices=["prep", "tair", "tmax", "tmin", "snow_ALAT"])
     p.add_argument("--band", type=int, default=1)
     p.add_argument("--resampling", choices=["nearest", "bilinear", "cubic", "average"], default="bilinear")
