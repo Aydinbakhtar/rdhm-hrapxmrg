@@ -6,9 +6,14 @@ import argparse
 import json
 from pathlib import Path
 
+import numpy as np
+
 from .pipeline import ascii_to_xmrg, xmrg_to_ascii, format_xmrg_report
 from .validate import validate_xmrg_file, scan_rdhm_log_for_missing_forcing
 from .xmrg import read_xmrg
+
+from .ascii_writer import write_ascii_grid
+from .regrid import convert_units, reproject_raster_to_hrap
 
 from .domain import (
     con_header_consistency_warnings,
@@ -186,6 +191,70 @@ def cmd_check_domain(args: argparse.Namespace) -> int:
     return 0
 
 
+def _target_grid_from_target_args(args: argparse.Namespace):
+    provided = [
+        args.target_ascii_template is not None,
+        args.target_xmrg_template is not None,
+        args.target_config is not None,
+        args.target_con is not None,
+        args.target_shp is not None,
+    ]
+
+    if sum(provided) != 1:
+        raise SystemExit(
+            "Provide exactly one target domain source: "
+            "--target-ascii-template, --target-xmrg-template, "
+            "--target-config, --target-con, or --target-shp"
+        )
+
+    if args.target_ascii_template:
+        return target_grid_from_ascii_template(args.target_ascii_template)
+    if args.target_xmrg_template:
+        return target_grid_from_xmrg_template(args.target_xmrg_template)
+    if args.target_config:
+        return target_grid_from_yaml(args.target_config)
+    if args.target_con:
+        return target_grid_from_con_file(args.target_con, buffer_cells=args.buffer_cells)
+    if args.target_shp:
+        return target_grid_from_shapefile(args.target_shp, buffer_cells=args.buffer_cells)
+
+    raise AssertionError("unreachable")
+
+def cmd_raster_to_ascii(args: argparse.Namespace) -> int:
+    target_grid = _target_grid_from_target_args(args)
+
+    arr = reproject_raster_to_hrap(
+        args.input,
+        target_grid,
+        band=args.band,
+        resampling=args.resampling,
+        dst_nodata=args.nodata,
+    )
+
+    if args.source_units and args.target_units:
+        arr = convert_units(arr, source_units=args.source_units, target_units=args.target_units)
+
+    write_ascii_grid(
+        args.output,
+        arr,
+        target_grid,
+        nodata=args.nodata,
+        fmt=args.fmt,
+    )
+
+    print(f"Wrote HRAP ASCII grid: {args.output}")
+    print(f"shape: {arr.shape}")
+    print(f"target: xor={target_grid.xor}, yor={target_grid.yor}, maxx={target_grid.maxx}, maxy={target_grid.maxy}")
+
+    valid = arr[np.isfinite(arr) & (arr > -900)]
+    if valid.size:
+        print(f"valid min/mean/max: {float(valid.min()):.4f}, {float(valid.mean()):.4f}, {float(valid.max()):.4f}")
+    else:
+        print("valid min/mean/max: no valid cells")
+
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="hrapxmrg",
@@ -262,6 +331,25 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--buffer-cells", type=int, default=0)
     p.add_argument("--output", type=Path, default=None)
     p.set_defaults(func=cmd_check_domain)
+
+    p = sub.add_parser("raster-to-ascii", help="Reproject source raster to exact HRAP ASCII grid")
+    p.add_argument("--input", required=True, type=Path)
+    p.add_argument("--output", required=True, type=Path)
+    p.add_argument("--band", type=int, default=1)
+    p.add_argument("--resampling", choices=["nearest", "bilinear", "cubic", "average"], default="bilinear")
+    p.add_argument("--nodata", type=float, default=-999.0)
+    p.add_argument("--fmt", default="%.2f")
+    p.add_argument("--source-units", default=None, help="Optional source units, e.g. C, K, F, mm")
+    p.add_argument("--target-units", default=None, help="Optional target units, e.g. F, C, mm")
+
+    p.add_argument("--target-ascii-template", type=Path, default=None)
+    p.add_argument("--target-xmrg-template", type=Path, default=None)
+    p.add_argument("--target-config", type=Path, default=None)
+    p.add_argument("--target-con", type=Path, default=None)
+    p.add_argument("--target-shp", type=Path, default=None)
+    p.add_argument("--buffer-cells", type=int, default=0)
+
+    p.set_defaults(func=cmd_raster_to_ascii)
 
 
     return parser
