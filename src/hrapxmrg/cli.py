@@ -8,6 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .batch import batch_raster_to_xmrg
 from .filenames import rdhm_filename
 from .pipeline import (
     ascii_to_xmrg,
@@ -344,6 +345,64 @@ def cmd_raster_to_xmrg(args: argparse.Namespace) -> int:
     return 0 if result.ok else 2
 
 
+def cmd_batch_raster_to_xmrg(args: argparse.Namespace) -> int:
+    target_grid, target_domain_source = _target_grid_and_source_from_target_args(args)
+    try:
+        rows = batch_raster_to_xmrg(
+            input_dir=args.input_dir,
+            pattern=args.pattern,
+            date_regex=args.date_regex,
+            variable=args.variable,
+            output_dir=args.output_dir,
+            target_grid=target_grid,
+            target_domain_source=target_domain_source,
+            hour=args.hour,
+            daily_precip=args.daily_precip,
+            source_units=args.source_units,
+            target_units=args.target_units,
+            band=args.band,
+            resampling=args.resampling,
+            summary=args.summary,
+            report_dir=args.report_dir,
+            continue_on_error=args.continue_on_error,
+            dry_run=args.dry_run,
+            suffix_gz=not args.no_gzip_name,
+        )
+    except Exception as exc:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "n_total": 0,
+                    "n_ok": 0,
+                    "n_failed": 1,
+                    "summary": str(args.summary) if args.summary else None,
+                    "message": str(exc),
+                },
+                indent=2,
+            )
+        )
+        return 2
+
+    n_total = len(rows)
+    n_ok = sum(1 for row in rows if row["ok"])
+    n_failed = n_total - n_ok
+    ok = n_failed == 0 or args.continue_on_error
+    print(
+        json.dumps(
+            {
+                "ok": ok,
+                "n_total": n_total,
+                "n_ok": n_ok,
+                "n_failed": n_failed,
+                "summary": str(args.summary) if args.summary else None,
+            },
+            indent=2,
+        )
+    )
+    return 0 if ok else 2
+
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -477,6 +536,33 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--buffer-cells", type=int, default=0)
 
     p.set_defaults(func=cmd_raster_to_xmrg)
+
+    p = sub.add_parser("batch-raster-to-xmrg", help="Batch convert rasters to RDHM XMRG")
+    p.add_argument("--input-dir", required=True, type=Path)
+    p.add_argument("--pattern", required=True)
+    p.add_argument("--date-regex", required=True)
+    p.add_argument("--variable", required=True, choices=["prep", "tair", "tmax", "tmin"])
+    p.add_argument("--output-dir", required=True, type=Path)
+    p.add_argument("--hour", type=int, default=None)
+    p.add_argument("--daily-precip", action="store_true")
+    p.add_argument("--source-units", default=None, help="Optional source units, e.g. C, K, F, mm")
+    p.add_argument("--target-units", default=None, help="Optional target units, e.g. F, C, mm")
+    p.add_argument("--band", type=int, default=1)
+    p.add_argument("--resampling", choices=["nearest", "bilinear", "cubic", "average"], default="bilinear")
+    p.add_argument("--summary", type=Path, default=None)
+    p.add_argument("--report-dir", type=Path, default=None)
+    p.add_argument("--continue-on-error", action="store_true")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--no-gzip-name", action="store_true")
+
+    p.add_argument("--target-ascii-template", type=Path, default=None)
+    p.add_argument("--target-xmrg-template", type=Path, default=None)
+    p.add_argument("--target-config", type=Path, default=None)
+    p.add_argument("--target-con", type=Path, default=None)
+    p.add_argument("--target-shp", type=Path, default=None)
+    p.add_argument("--buffer-cells", type=int, default=0)
+
+    p.set_defaults(func=cmd_batch_raster_to_xmrg)
 
     return parser
 
