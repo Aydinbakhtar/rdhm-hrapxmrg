@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .pipeline import ascii_to_xmrg, xmrg_to_ascii, format_xmrg_report
+from .pipeline import ascii_to_xmrg, xmrg_to_ascii, format_xmrg_report, raster_to_xmrg
 from .validate import validate_xmrg_file, scan_rdhm_log_for_missing_forcing
 from .xmrg import read_xmrg
 
@@ -255,6 +255,30 @@ def cmd_raster_to_ascii(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_raster_to_xmrg(args: argparse.Namespace) -> int:
+    target_grid = _target_grid_from_target_args(args)
+
+    result = raster_to_xmrg(
+        input_raster=args.input,
+        output_xmrg=args.output,
+        variable=args.variable,
+        target_grid=target_grid,
+        band=args.band,
+        resampling=args.resampling,
+        source_units=args.source_units,
+        target_units=args.target_units,
+        header_type=args.header_type,
+        dtype=args.dtype,
+        scale=args.scale,
+        orientation=args.orientation,
+        secondary_header=args.secondary_header,
+    )
+
+    print(json.dumps({"ok": result.ok, "message": result.message, "details": result.details}, indent=2))
+    return 0 if result.ok else 2
+
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="hrapxmrg",
@@ -351,6 +375,28 @@ def build_parser() -> argparse.ArgumentParser:
 
     p.set_defaults(func=cmd_raster_to_ascii)
 
+    p = sub.add_parser("raster-to-xmrg", help="Reproject source raster to exact HRAP grid and write XMRG")
+    p.add_argument("--input", required=True, type=Path)
+    p.add_argument("--output", required=True, type=Path)
+    p.add_argument("--variable", required=True, choices=["prep", "tair", "tmax", "tmin", "snow_ALAT"])
+    p.add_argument("--band", type=int, default=1)
+    p.add_argument("--resampling", choices=["nearest", "bilinear", "cubic", "average"], default="bilinear")
+    p.add_argument("--source-units", default=None, help="Optional source units, e.g. C, K, F, mm")
+    p.add_argument("--target-units", default=None, help="Optional target units, e.g. F, C, mm")
+    p.add_argument("--header-type", choices=["int32", "float32"], default=None)
+    p.add_argument("--dtype", choices=["int16", "float32"], default=None)
+    p.add_argument("--scale", type=float, default=None)
+    p.add_argument("--orientation", choices=["as-is", "flipud"], default="flipud")
+    p.add_argument("--secondary-header", action="store_true")
+
+    p.add_argument("--target-ascii-template", type=Path, default=None)
+    p.add_argument("--target-xmrg-template", type=Path, default=None)
+    p.add_argument("--target-config", type=Path, default=None)
+    p.add_argument("--target-con", type=Path, default=None)
+    p.add_argument("--target-shp", type=Path, default=None)
+    p.add_argument("--buffer-cells", type=int, default=0)
+
+    p.set_defaults(func=cmd_raster_to_xmrg)
 
     return parser
 
