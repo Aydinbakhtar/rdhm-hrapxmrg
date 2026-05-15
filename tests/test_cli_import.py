@@ -33,3 +33,23 @@ def test_cli_parser_includes_batch_raster_to_xmrg_command():
         ]
     )
     assert args.command == "batch-raster-to-xmrg"
+
+
+def test_cli_parser_includes_prism_commands():
+    parser = build_parser()
+    info_args = parser.parse_args(["prism-info", "--input", "prism_ppt_20250101.zip"])
+    assert info_args.command == "prism-info"
+
+    convert_args = parser.parse_args(
+        [
+            "prism-to-xmrg",
+            "--input",
+            "prism_ppt_20250101.zip",
+            "--output-dir",
+            "out",
+            "--daily-precip",
+            "--target-config",
+            "domain.yaml",
+        ]
+    )
+    assert convert_args.command == "prism-to-xmrg"
