@@ -88,3 +88,34 @@ def test_cli_parser_includes_daily_to_hourly_commands():
         ]
     )
     assert temp_args.command == "daily-temp-to-hourly-tair"
+
+
+def test_cli_parser_includes_batch_prism_hourly_commands():
+    parser = build_parser()
+    prep_args = parser.parse_args(
+        [
+            "batch-prism-hourly-prep",
+            "--input-dir",
+            "ppt",
+            "--output-dir",
+            "out",
+            "--target-config",
+            "domain.yaml",
+        ]
+    )
+    assert prep_args.command == "batch-prism-hourly-prep"
+
+    tair_args = parser.parse_args(
+        [
+            "batch-prism-hourly-tair",
+            "--tmin-dir",
+            "tmin",
+            "--tmax-dir",
+            "tmax",
+            "--output-dir",
+            "out",
+            "--target-config",
+            "domain.yaml",
+        ]
+    )
+    assert tair_args.command == "batch-prism-hourly-tair"
