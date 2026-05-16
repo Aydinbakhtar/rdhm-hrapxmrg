@@ -19,6 +19,7 @@ from .pipeline import (
     xmrg_to_ascii,
 )
 from .prism import prism_info, prism_to_xmrg
+from .temporal import daily_raster_ppt_to_hourly_xmrg, daily_temp_to_hourly_tair_xmrg
 from .validate import validate_xmrg_file, scan_rdhm_log_for_missing_forcing
 from .xmrg import read_xmrg
 
@@ -434,6 +435,48 @@ def cmd_prism_to_xmrg(args: argparse.Namespace) -> int:
     return 0 if result.ok else 2
 
 
+def cmd_daily_ppt_to_hourly_xmrg(args: argparse.Namespace) -> int:
+    target_grid, target_domain_source = _target_grid_and_source_from_target_args(args)
+    result = daily_raster_ppt_to_hourly_xmrg(
+        input_raster=args.input,
+        output_dir=args.output_dir,
+        target_grid=target_grid,
+        date_value=args.date,
+        method=args.method,
+        band=args.band,
+        resampling=args.resampling,
+        report_dir=args.report_dir,
+        summary=args.summary,
+        target_domain_source=target_domain_source,
+    )
+    result.pop("rows", None)
+    print(json.dumps(result, indent=2))
+    return 0 if result["ok"] else 2
+
+
+def cmd_daily_temp_to_hourly_tair(args: argparse.Namespace) -> int:
+    target_grid, target_domain_source = _target_grid_and_source_from_target_args(args)
+    result = daily_temp_to_hourly_tair_xmrg(
+        tmin_raster=args.tmin,
+        tmax_raster=args.tmax,
+        tmean_raster=args.tmean,
+        output_dir=args.output_dir,
+        target_grid=target_grid,
+        date_value=args.date,
+        method=args.method,
+        tmin_hour=args.tmin_hour,
+        tmax_hour=args.tmax_hour,
+        band=args.band,
+        resampling=args.resampling,
+        report_dir=args.report_dir,
+        summary=args.summary,
+        target_domain_source=target_domain_source,
+    )
+    result.pop("rows", None)
+    print(json.dumps(result, indent=2))
+    return 0 if result["ok"] else 2
+
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -620,6 +663,48 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--buffer-cells", type=int, default=0)
 
     p.set_defaults(func=cmd_prism_to_xmrg)
+
+    p = sub.add_parser("daily-ppt-to-hourly-xmrg", help="Split daily precipitation raster to hourly prep XMRG")
+    p.add_argument("--input", required=True, type=Path)
+    p.add_argument("--output-dir", required=True, type=Path)
+    p.add_argument("--date", required=True)
+    p.add_argument("--method", choices=["uniform"], default="uniform")
+    p.add_argument("--band", type=int, default=1)
+    p.add_argument("--resampling", choices=["nearest", "bilinear", "cubic", "average"], default="bilinear")
+    p.add_argument("--report-dir", type=Path, default=None)
+    p.add_argument("--summary", type=Path, default=None)
+
+    p.add_argument("--target-ascii-template", type=Path, default=None)
+    p.add_argument("--target-xmrg-template", type=Path, default=None)
+    p.add_argument("--target-config", type=Path, default=None)
+    p.add_argument("--target-con", type=Path, default=None)
+    p.add_argument("--target-shp", type=Path, default=None)
+    p.add_argument("--buffer-cells", type=int, default=0)
+
+    p.set_defaults(func=cmd_daily_ppt_to_hourly_xmrg)
+
+    p = sub.add_parser("daily-temp-to-hourly-tair", help="Generate hourly tair XMRG from daily tmin/tmax rasters")
+    p.add_argument("--tmin", required=True, type=Path)
+    p.add_argument("--tmax", required=True, type=Path)
+    p.add_argument("--tmean", type=Path, default=None)
+    p.add_argument("--output-dir", required=True, type=Path)
+    p.add_argument("--date", required=True)
+    p.add_argument("--method", choices=["sinusoidal"], default="sinusoidal")
+    p.add_argument("--tmin-hour", type=int, default=6)
+    p.add_argument("--tmax-hour", type=int, default=15)
+    p.add_argument("--band", type=int, default=1)
+    p.add_argument("--resampling", choices=["nearest", "bilinear", "cubic", "average"], default="bilinear")
+    p.add_argument("--report-dir", type=Path, default=None)
+    p.add_argument("--summary", type=Path, default=None)
+
+    p.add_argument("--target-ascii-template", type=Path, default=None)
+    p.add_argument("--target-xmrg-template", type=Path, default=None)
+    p.add_argument("--target-config", type=Path, default=None)
+    p.add_argument("--target-con", type=Path, default=None)
+    p.add_argument("--target-shp", type=Path, default=None)
+    p.add_argument("--buffer-cells", type=int, default=0)
+
+    p.set_defaults(func=cmd_daily_temp_to_hourly_tair)
 
     return parser
 
