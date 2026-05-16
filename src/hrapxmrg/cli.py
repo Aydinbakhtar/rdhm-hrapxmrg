@@ -19,6 +19,7 @@ from .pipeline import (
     xmrg_to_ascii,
 )
 from .prism import prism_info, prism_to_xmrg
+from .prism_batch import batch_prism_hourly_prep, batch_prism_hourly_tair
 from .temporal import daily_raster_ppt_to_hourly_xmrg, daily_temp_to_hourly_tair_xmrg
 from .validate import validate_xmrg_file, scan_rdhm_log_for_missing_forcing
 from .xmrg import read_xmrg
@@ -477,6 +478,64 @@ def cmd_daily_temp_to_hourly_tair(args: argparse.Namespace) -> int:
     return 0 if result["ok"] else 2
 
 
+def cmd_batch_prism_hourly_prep(args: argparse.Namespace) -> int:
+    target_grid, target_domain_source = _target_grid_and_source_from_target_args(args)
+    try:
+        result = batch_prism_hourly_prep(
+            input_dir=args.input_dir,
+            pattern=args.pattern,
+            output_dir=args.output_dir,
+            start_date=args.start_date,
+            end_date=args.end_date,
+            method=args.method,
+            band=args.band,
+            resampling=args.resampling,
+            summary=args.summary,
+            report_dir=args.report_dir,
+            continue_on_error=args.continue_on_error,
+            target_grid=target_grid,
+            target_domain_source=target_domain_source,
+        )
+    except Exception as exc:
+        print(json.dumps({"ok": False, "variable": "prep", "message": str(exc)}, indent=2))
+        return 2
+    result.pop("rows", None)
+    print(json.dumps(result, indent=2))
+    return 0 if result["ok"] else 2
+
+
+def cmd_batch_prism_hourly_tair(args: argparse.Namespace) -> int:
+    target_grid, target_domain_source = _target_grid_and_source_from_target_args(args)
+    try:
+        result = batch_prism_hourly_tair(
+            tmin_dir=args.tmin_dir,
+            tmax_dir=args.tmax_dir,
+            tmean_dir=args.tmean_dir,
+            tmin_pattern=args.tmin_pattern,
+            tmax_pattern=args.tmax_pattern,
+            tmean_pattern=args.tmean_pattern,
+            output_dir=args.output_dir,
+            start_date=args.start_date,
+            end_date=args.end_date,
+            method=args.method,
+            tmin_hour=args.tmin_hour,
+            tmax_hour=args.tmax_hour,
+            band=args.band,
+            resampling=args.resampling,
+            summary=args.summary,
+            report_dir=args.report_dir,
+            continue_on_error=args.continue_on_error,
+            target_grid=target_grid,
+            target_domain_source=target_domain_source,
+        )
+    except Exception as exc:
+        print(json.dumps({"ok": False, "variable": "tair", "message": str(exc)}, indent=2))
+        return 2
+    result.pop("rows", None)
+    print(json.dumps(result, indent=2))
+    return 0 if result["ok"] else 2
+
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -705,6 +764,56 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--buffer-cells", type=int, default=0)
 
     p.set_defaults(func=cmd_daily_temp_to_hourly_tair)
+
+    p = sub.add_parser("batch-prism-hourly-prep", help="Batch convert daily PRISM ppt to hourly prep XMRG")
+    p.add_argument("--input-dir", required=True, type=Path)
+    p.add_argument("--pattern", default="prism_ppt_*.zip")
+    p.add_argument("--output-dir", required=True, type=Path)
+    p.add_argument("--start-date", default=None)
+    p.add_argument("--end-date", default=None)
+    p.add_argument("--method", choices=["uniform"], default="uniform")
+    p.add_argument("--band", type=int, default=1)
+    p.add_argument("--resampling", choices=["nearest", "bilinear", "cubic", "average"], default="bilinear")
+    p.add_argument("--summary", type=Path, default=None)
+    p.add_argument("--report-dir", type=Path, default=None)
+    p.add_argument("--continue-on-error", action="store_true")
+
+    p.add_argument("--target-ascii-template", type=Path, default=None)
+    p.add_argument("--target-xmrg-template", type=Path, default=None)
+    p.add_argument("--target-config", type=Path, default=None)
+    p.add_argument("--target-con", type=Path, default=None)
+    p.add_argument("--target-shp", type=Path, default=None)
+    p.add_argument("--buffer-cells", type=int, default=0)
+
+    p.set_defaults(func=cmd_batch_prism_hourly_prep)
+
+    p = sub.add_parser("batch-prism-hourly-tair", help="Batch convert daily PRISM tmin/tmax to hourly tair XMRG")
+    p.add_argument("--tmin-dir", required=True, type=Path)
+    p.add_argument("--tmax-dir", required=True, type=Path)
+    p.add_argument("--tmean-dir", type=Path, default=None)
+    p.add_argument("--tmin-pattern", default="prism_tmin_*.zip")
+    p.add_argument("--tmax-pattern", default="prism_tmax_*.zip")
+    p.add_argument("--tmean-pattern", default="prism_tmean_*.zip")
+    p.add_argument("--output-dir", required=True, type=Path)
+    p.add_argument("--start-date", default=None)
+    p.add_argument("--end-date", default=None)
+    p.add_argument("--method", choices=["sinusoidal"], default="sinusoidal")
+    p.add_argument("--tmin-hour", type=int, default=6)
+    p.add_argument("--tmax-hour", type=int, default=15)
+    p.add_argument("--band", type=int, default=1)
+    p.add_argument("--resampling", choices=["nearest", "bilinear", "cubic", "average"], default="bilinear")
+    p.add_argument("--summary", type=Path, default=None)
+    p.add_argument("--report-dir", type=Path, default=None)
+    p.add_argument("--continue-on-error", action="store_true")
+
+    p.add_argument("--target-ascii-template", type=Path, default=None)
+    p.add_argument("--target-xmrg-template", type=Path, default=None)
+    p.add_argument("--target-config", type=Path, default=None)
+    p.add_argument("--target-con", type=Path, default=None)
+    p.add_argument("--target-shp", type=Path, default=None)
+    p.add_argument("--buffer-cells", type=int, default=0)
+
+    p.set_defaults(func=cmd_batch_prism_hourly_tair)
 
     return parser
 
