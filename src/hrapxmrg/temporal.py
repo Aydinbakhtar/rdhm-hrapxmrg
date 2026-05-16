@@ -109,17 +109,28 @@ def hourly_temperature_from_tmin_tmax(
         raise ValueError("tmin_hour must be 0 through 23")
     if type(tmax_hour) is not int or not 0 <= tmax_hour <= 23:
         raise ValueError("tmax_hour must be 0 through 23")
+    warming_hours = (tmax_hour - tmin_hour) % 24
+    if warming_hours == 0:
+        raise ValueError("tmin_hour and tmax_hour must be different")
+    cooling_hours = 24 - warming_hours
 
     tmin = np.asarray(tmin_array, dtype=np.float32)
     tmax = np.asarray(tmax_array, dtype=np.float32)
     valid = _valid_mask(tmin, nodata) & _valid_mask(tmax, nodata) & (tmax >= tmin)
 
-    mean = (tmin + tmax) / 2.0
-    amp = (tmax - tmin) / 2.0
+    spread = tmax - tmin
     hourly: list[np.ndarray] = []
     for hour in range(24):
         arr = np.full(tmin.shape, nodata, dtype=np.float32)
-        values = mean + amp * np.cos(2.0 * np.pi * (hour - tmax_hour) / 24.0)
+        hours_after_tmin = (hour - tmin_hour) % 24
+        if hours_after_tmin <= warming_hours:
+            phase = hours_after_tmin / warming_hours
+            fraction = 0.5 * (1.0 - np.cos(np.pi * phase))
+        else:
+            hours_after_tmax = (hour - tmax_hour) % 24
+            phase = hours_after_tmax / cooling_hours
+            fraction = 0.5 * (1.0 + np.cos(np.pi * phase))
+        values = tmin + spread * fraction
         arr[valid] = np.clip(values[valid], tmin[valid], tmax[valid])
         hourly.append(arr)
 

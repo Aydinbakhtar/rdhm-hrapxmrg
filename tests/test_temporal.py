@@ -104,10 +104,12 @@ def test_hourly_temperature_from_tmin_tmax_range():
     tmin = np.full((2, 2), 0.0, dtype=np.float32)
     tmax = np.full((2, 2), 10.0, dtype=np.float32)
 
-    hourly = hourly_temperature_from_tmin_tmax(tmin, tmax)
+    hourly = hourly_temperature_from_tmin_tmax(tmin, tmax, tmin_hour=6, tmax_hour=15)
     stacked = np.stack(hourly)
 
     assert len(hourly) == 24
+    assert np.allclose(hourly[6], 0.0, atol=0.01)
+    assert np.allclose(hourly[15], 10.0, atol=0.01)
     assert float(np.nanmin(stacked)) == pytest.approx(0.0, abs=0.01)
     assert float(np.nanmax(stacked)) == pytest.approx(10.0, abs=0.01)
     assert np.all(stacked >= 0.0)
@@ -138,6 +140,10 @@ def test_daily_temp_to_hourly_tair_pipeline(tmp_path: Path):
     assert result["n_files"] == 24
     assert (output_dir / "tair0101202500z.gz").exists()
     assert (output_dir / "tair0101202523z.gz").exists()
+    min_row = min(result["rows"], key=lambda row: row["min"])
+    max_row = max(result["rows"], key=lambda row: row["max"])
+    assert min_row["hour"] == 6
+    assert max_row["hour"] == 15
 
     mins = []
     maxes = []
