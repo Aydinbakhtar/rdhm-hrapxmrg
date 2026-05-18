@@ -225,11 +225,12 @@ def _planned_output(
     variable: str,
     valid_time: datetime,
     member: MemberSelection,
+    member_loop_mode: bool,
     member_output_mode: str,
     member_prefix: str,
 ) -> Path:
     filename = _filename_for_valid_time(variable, valid_time)
-    if member.label is None:
+    if member.label is None or not member_loop_mode:
         return Path(output_dir) / filename
     if member_output_mode == "subdirs":
         return build_member_output_dir(
@@ -247,6 +248,7 @@ def _report_path(
     report_dir: str | Path | None,
     output_path: Path,
     member: MemberSelection,
+    member_loop_mode: bool,
     member_output_mode: str,
     member_prefix: str,
 ) -> Path | None:
@@ -255,7 +257,7 @@ def _report_path(
     name = output_path.name
     stem = name[:-3] if name.endswith(".gz") else name
     report_name = f"{stem}.report.json"
-    if member.label is not None and member_output_mode == "subdirs":
+    if member.label is not None and member_loop_mode and member_output_mode == "subdirs":
         return build_member_output_dir(
             report_dir,
             member,
@@ -457,6 +459,7 @@ def batch_forecast_nc_to_xmrg(
         member_name=member_name,
         all_members=all_members,
     )
+    member_loop_mode = all_members or len(members) > 1
 
     rows: list[dict[str, Any]] = []
     for member in members:
@@ -467,6 +470,7 @@ def batch_forecast_nc_to_xmrg(
                 variable=variable,
                 valid_time=valid_time,
                 member=member,
+                member_loop_mode=member_loop_mode,
                 member_output_mode=member_output_mode,
                 member_prefix=member_prefix,
             )
@@ -474,6 +478,7 @@ def batch_forecast_nc_to_xmrg(
                 report_dir=report_dir,
                 output_path=output,
                 member=member,
+                member_loop_mode=member_loop_mode,
                 member_output_mode=member_output_mode,
                 member_prefix=member_prefix,
             )
@@ -502,7 +507,7 @@ def batch_forecast_nc_to_xmrg(
                 continue
 
             try:
-                if member.label is not None and member_output_mode == "flat":
+                if member.label is not None and member_loop_mode and member_output_mode == "flat":
                     conversion_output = output
                     conversion_output_dir = None
                 else:

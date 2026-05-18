@@ -110,7 +110,11 @@ def test_batch_forecast_apcp_all_leads(tmp_path: Path):
     assert (output_dir / "xmrg0518202601z.gz").exists()
     assert (output_dir / "xmrg0518202602z.gz").exists()
     assert (output_dir / "xmrg0518202603z.gz").exists()
-    assert len(_read_summary(summary)) == 3
+    assert not (output_dir / "member_000").exists()
+    rows = _read_summary(summary)
+    assert len(rows) == 3
+    assert rows[0]["member_index"] == "0"
+    assert rows[0]["output"].endswith("out/xmrg0518202601z.gz")
 
 
 def test_batch_forecast_all_members_subdirs(tmp_path: Path):
@@ -175,6 +179,7 @@ def test_batch_forecast_temperature_kelvin_to_f(tmp_path: Path):
 
     assert result["ok"]
     assert (output_dir / "tair0518202601z.gz").exists()
+    assert not (output_dir / "member_000").exists()
     assert np.nanmean(_physical(output_dir / "tair0518202601z.gz")) == pytest.approx(33.8, abs=0.05)
 
 
@@ -204,6 +209,7 @@ def test_batch_forecast_rate_precipitation(tmp_path: Path):
     )
 
     assert result["ok"]
+    assert not (output_dir / "member_000").exists()
     assert np.nanmean(_physical(output_dir / "xmrg0518202601z.gz")) == pytest.approx(1.0, abs=0.02)
 
 
@@ -247,7 +253,9 @@ def test_batch_forecast_dry_run_writes_planned_summary_without_outputs(tmp_path:
     assert result["ok"]
     assert result["n_requested"] == 3
     assert not (output_dir / "xmrg0518202601z.gz").exists()
+    assert not (output_dir / "member_000").exists()
     rows = _read_summary(summary)
     assert len(rows) == 3
     assert {row["message"] for row in rows} == {"planned"}
     assert rows[0]["output"].endswith("xmrg0518202601z.gz")
+    assert "member_000" not in rows[0]["output"]
