@@ -177,8 +177,13 @@ def test_cli_parser_has_batch_forecast_nc_command():
             "1,2,3",
             "--member-index",
             "0",
+            "--allow-negative-diff",
+            "--negative-diff-tolerance",
+            "1e-6",
             "--target-config",
             "domain.yaml",
         ]
     )
     assert args.command == "batch-forecast-nc-to-xmrg"
+    assert args.allow_negative_diff is True
+    assert args.negative_diff_tolerance == 1e-6

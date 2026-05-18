@@ -11,13 +11,25 @@ import csv
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
+import tempfile
 from typing import Any
 
 import numpy as np
 
 from .filenames import rdhm_filename
 from .hrap import TargetGrid
-from .netcdf import _parse_datetime, _xarray, identify_dimension_roles, nc_to_xmrg, normalize_lead_to_hours
+from .netcdf import (
+    _parse_datetime,
+    _xarray,
+    convert_netcdf_units,
+    identify_dimension_roles,
+    nc_to_xmrg,
+    normalize_lead_to_hours,
+    select_xarray_slice,
+    write_xarray_slice_to_temp_geotiff,
+)
+from .pipeline import raster_to_xmrg, raster_to_xmrg_manifest, write_raster_to_xmrg_manifest
+from .validate import ValidationResult
 
 
 SUMMARY_COLUMNS = [
@@ -43,6 +55,11 @@ SUMMARY_COLUMNS = [
     "target_units",
     "accumulation_mode",
     "accumulation_hours",
+    "previous_lead_hour",
+    "previous_valid_time",
+    "negative_diff_count",
+    "negative_diff_min",
+    "diff_method",
     "report",
 ]
 
@@ -309,6 +326,26 @@ def _select_leads(
     return selected
 
 
+def _require_ordered_leads(leads: list[LeadSelection]) -> None:
+    for previous, current in zip(leads, leads[1:]):
+        if current.hour <= previous.hour:
+            raise ValueError("total-since-init requires ordered, strictly increasing leads")
+
+
+def _previous_lead_for_total(
+    *,
+    current: LeadSelection,
+    previous_selected: LeadSelection | None,
+    discovered: list[LeadSelection],
+) -> LeadSelection | None:
+    if previous_selected is not None:
+        return previous_selected
+    for lead in discovered:
+        if np.isclose(lead.hour, 0.0, rtol=0.0, atol=1e-6) and current.hour > 0:
+            return lead
+    return None
+
+
 def _select_members(
     *,
     input_path: str | Path,
@@ -365,6 +402,11 @@ def _row_from_result(
     target_units: str,
     accumulation_mode: str,
     accumulation_hours: float | None,
+    previous_lead_hour: float | None = None,
+    previous_valid_time: datetime | None = None,
+    negative_diff_count: int | None = None,
+    negative_diff_min: float | None = None,
+    diff_method: str | None = None,
     report: Path | None,
     ok: bool,
     message: str,
@@ -394,7 +436,188 @@ def _row_from_result(
         "target_units": target_units,
         "accumulation_mode": accumulation_mode,
         "accumulation_hours": accumulation_hours,
+        "previous_lead_hour": previous_lead_hour,
+        "previous_valid_time": previous_valid_time.isoformat() if previous_valid_time else None,
+        "negative_diff_count": negative_diff_count,
+        "negative_diff_min": negative_diff_min,
+        "diff_method": diff_method,
         "report": str(report) if report else None,
+    }
+
+
+def _member_kwargs(member: MemberSelection) -> dict[str, Any]:
+    return {
+        "member_index": member.index,
+        "member_name": member.name if member.index is None else None,
+    }
+
+
+def _select_cumulative_array(
+    ds: Any,
+    *,
+    nc_variable: str,
+    init_time: str | None,
+    init_index: int | None,
+    lead: LeadSelection,
+    member: MemberSelection,
+    source_units: str,
+    target_units: str,
+) -> tuple[Any, dict[str, Any]]:
+    da, metadata = select_xarray_slice(
+        ds,
+        nc_variable,
+        init_index=init_index,
+        init_time=init_time,
+        lead_hour=lead.hour,
+        **_member_kwargs(member),
+    )
+    converted = convert_netcdf_units(
+        np.asarray(da.values, dtype=np.float32),
+        variable="prep",
+        source_units=source_units,
+        target_units=target_units,
+        accumulation_mode="step",
+    )
+    return da.copy(data=converted), metadata
+
+
+def _write_total_since_init_xmrg(
+    *,
+    input_path: str | Path,
+    nc_variable: str,
+    output: Path,
+    report: Path | None,
+    variable: str,
+    source_units: str,
+    target_units: str,
+    target_grid: TargetGrid,
+    target_domain_source: str | None,
+    resolved_init_time: str,
+    resolved_init_index: int | None,
+    explicit_init_time: bool,
+    lead: LeadSelection,
+    previous_lead: LeadSelection | None,
+    member: MemberSelection,
+    valid_time: datetime,
+    previous_valid_time: datetime | None,
+    resampling: str,
+    allow_negative_diff: bool,
+    negative_diff_tolerance: float,
+) -> tuple[ValidationResult, dict[str, Any]]:
+    init_selector_time = resolved_init_time if explicit_init_time else None
+    init_selector_index = resolved_init_index if not explicit_init_time else None
+    xr = _xarray()
+    with tempfile.TemporaryDirectory(prefix="hrapxmrg-nc-total-") as tmp:
+        tmp_path = Path(tmp)
+        temp_tif = tmp_path / "step_precip.tif"
+        with xr.open_dataset(input_path, decode_times=True) as ds:
+            current_da, current_meta = _select_cumulative_array(
+                ds,
+                nc_variable=nc_variable,
+                init_time=init_selector_time,
+                init_index=init_selector_index,
+                lead=lead,
+                member=member,
+                source_units=source_units,
+                target_units=target_units,
+            )
+            current = np.asarray(current_da.values, dtype=np.float32)
+            if previous_lead is None:
+                diff = current.copy()
+                diff_method = "first_selected_lead_direct"
+                valid = np.isfinite(current) & (current > -900)
+            else:
+                previous_da, _previous_meta = _select_cumulative_array(
+                    ds,
+                    nc_variable=nc_variable,
+                    init_time=init_selector_time,
+                    init_index=init_selector_index,
+                    lead=previous_lead,
+                    member=member,
+                    source_units=source_units,
+                    target_units=target_units,
+                )
+                previous = np.asarray(previous_da.values, dtype=np.float32)
+                diff = current - previous
+                diff_method = "current_minus_previous_lead"
+                valid = np.isfinite(current) & np.isfinite(previous) & (current > -900) & (previous > -900)
+
+            negative = valid & (diff < -float(negative_diff_tolerance))
+            negative_diff_count = int(np.count_nonzero(negative))
+            negative_values = diff[valid & (diff < 0)]
+            negative_diff_min = float(np.nanmin(negative_values)) if negative_values.size else None
+            if negative_diff_count and not allow_negative_diff:
+                raise ValueError(
+                    "total-since-init precipitation difference is negative beyond tolerance; "
+                    "use --allow-negative-diff to clamp negatives to zero"
+                )
+            if allow_negative_diff or negative_values.size:
+                clamp = valid & (diff < 0)
+                diff[clamp] = 0.0
+            diff[~valid] = -999.0
+
+            current_da = current_da.copy(data=diff.astype(np.float32))
+            write_xarray_slice_to_temp_geotiff(current_da, temp_tif)
+
+        result = raster_to_xmrg(
+            input_raster=temp_tif,
+            output_xmrg=output,
+            variable=variable,
+            target_grid=target_grid,
+            band=1,
+            resampling=resampling,
+            source_units=target_units,
+            target_units=target_units,
+        )
+
+    details = dict(result.details)
+    details.update(
+        {
+            "input_netcdf": str(input_path),
+            "nc_variable": nc_variable,
+            "variable": variable,
+            "init_index": resolved_init_index,
+            "init_time": resolved_init_time,
+            "lead_index": lead.index,
+            "lead_hour": lead.hour,
+            "previous_lead_hour": previous_lead.hour if previous_lead else None,
+            "valid_time": valid_time.isoformat(),
+            "valid_time_source": "derived_from_init_plus_lead",
+            "member_index": member.index,
+            "member_name": member.name,
+            "source_units": source_units,
+            "target_units": target_units,
+            "accumulation_mode": "total-since-init",
+            "previous_valid_time": previous_valid_time.isoformat() if previous_valid_time else None,
+            "negative_diff_count": negative_diff_count,
+            "negative_diff_min": negative_diff_min,
+            "diff_method": diff_method,
+            "selected_dimensions": current_meta.get("selected_dimensions", {}),
+            "selected_coordinate_values": current_meta.get("selected_coordinate_values", {}),
+        }
+    )
+    updated = ValidationResult(result.ok, result.message, details)
+    if report:
+        manifest = raster_to_xmrg_manifest(
+            input_raster=str(input_path),
+            output_xmrg=output,
+            variable=variable,
+            target_grid=target_grid,
+            validation=updated,
+            date=valid_time.date().isoformat(),
+            hour=valid_time.hour,
+            source_units=source_units,
+            target_units=target_units,
+            target_domain_source=target_domain_source,
+        )
+        manifest["netcdf"] = details
+        write_raster_to_xmrg_manifest(report, manifest)
+    return updated, {
+        "previous_lead_hour": previous_lead.hour if previous_lead else None,
+        "previous_valid_time": previous_valid_time,
+        "negative_diff_count": negative_diff_count,
+        "negative_diff_min": negative_diff_min,
+        "diff_method": diff_method,
     }
 
 
@@ -423,6 +646,8 @@ def batch_forecast_nc_to_xmrg(
     member_prefix: str = "member",
     accumulation_mode: str = "step",
     accumulation_hours: float | None = None,
+    allow_negative_diff: bool = False,
+    negative_diff_tolerance: float = 1e-6,
     resampling: str = "bilinear",
     summary: str | Path | None = None,
     report_dir: str | Path | None = None,
@@ -430,8 +655,8 @@ def batch_forecast_nc_to_xmrg(
     dry_run: bool = False,
 ) -> dict[str, Any]:
     """Generate a forecast folder by looping over NetCDF leads and members."""
-    if accumulation_mode == "total-since-init":
-        raise ValueError("total-since-init precipitation requires adjacent-lead differencing; not supported yet.")
+    if accumulation_mode == "total-since-init" and variable != "prep":
+        raise ValueError("total-since-init accumulation mode is only valid for variable=prep")
 
     resolved_init_time, resolved_init_index = _resolve_init(
         input_path=input_path,
@@ -452,6 +677,9 @@ def batch_forecast_nc_to_xmrg(
         lead_step=lead_step,
         all_leads=all_leads,
     )
+    if accumulation_mode == "total-since-init":
+        _require_ordered_leads(leads)
+    discovered_leads = discover_leads_from_netcdf(input_path, nc_variable)
     members = _select_members(
         input_path=input_path,
         nc_variable=nc_variable,
@@ -463,8 +691,23 @@ def batch_forecast_nc_to_xmrg(
 
     rows: list[dict[str, Any]] = []
     for member in members:
+        previous_selected_lead: LeadSelection | None = None
         for lead in leads:
             valid_time = init_dt + timedelta(hours=float(lead.hour))
+            previous_lead = (
+                _previous_lead_for_total(
+                    current=lead,
+                    previous_selected=previous_selected_lead,
+                    discovered=discovered_leads,
+                )
+                if accumulation_mode == "total-since-init"
+                else None
+            )
+            previous_valid_time = (
+                init_dt + timedelta(hours=float(previous_lead.hour))
+                if previous_lead is not None
+                else None
+            )
             output = _planned_output(
                 output_dir=output_dir,
                 variable=variable,
@@ -499,6 +742,9 @@ def batch_forecast_nc_to_xmrg(
                         target_units=target_units,
                         accumulation_mode=accumulation_mode,
                         accumulation_hours=accumulation_hours,
+                        previous_lead_hour=previous_lead.hour if previous_lead else None,
+                        previous_valid_time=previous_valid_time,
+                        diff_method="planned_total_since_init_diff" if accumulation_mode == "total-since-init" else None,
                         report=report,
                         ok=True,
                         message="planned",
@@ -514,26 +760,51 @@ def batch_forecast_nc_to_xmrg(
                     conversion_output = None
                     conversion_output_dir = output.parent
 
-                result = nc_to_xmrg(
-                    input_path=input_path,
-                    nc_variable=nc_variable,
-                    output_xmrg=conversion_output,
-                    output_dir=conversion_output_dir,
-                    variable=variable,
-                    init_index=resolved_init_index if init_time is None else None,
-                    init_time=resolved_init_time if init_time is not None else None,
-                    lead_hour=lead.hour,
-                    member_index=member.index,
-                    member_name=member.name if member.index is None else None,
-                    source_units=source_units,
-                    target_units=target_units,
-                    target_grid=target_grid,
-                    target_domain_source=target_domain_source,
-                    resampling=resampling,
-                    report=report,
-                    accumulation_mode=accumulation_mode,
-                    accumulation_hours=accumulation_hours,
-                )
+                extra: dict[str, Any] = {}
+                if accumulation_mode == "total-since-init":
+                    result, extra = _write_total_since_init_xmrg(
+                        input_path=input_path,
+                        nc_variable=nc_variable,
+                        output=output,
+                        report=report,
+                        variable=variable,
+                        source_units=source_units,
+                        target_units=target_units,
+                        target_grid=target_grid,
+                        target_domain_source=target_domain_source,
+                        resolved_init_time=resolved_init_time,
+                        resolved_init_index=resolved_init_index,
+                        explicit_init_time=init_time is not None,
+                        lead=lead,
+                        previous_lead=previous_lead,
+                        member=member,
+                        valid_time=valid_time,
+                        previous_valid_time=previous_valid_time,
+                        resampling=resampling,
+                        allow_negative_diff=allow_negative_diff,
+                        negative_diff_tolerance=negative_diff_tolerance,
+                    )
+                else:
+                    result = nc_to_xmrg(
+                        input_path=input_path,
+                        nc_variable=nc_variable,
+                        output_xmrg=conversion_output,
+                        output_dir=conversion_output_dir,
+                        variable=variable,
+                        init_index=resolved_init_index if init_time is None else None,
+                        init_time=resolved_init_time if init_time is not None else None,
+                        lead_hour=lead.hour,
+                        member_index=member.index,
+                        member_name=member.name if member.index is None else None,
+                        source_units=source_units,
+                        target_units=target_units,
+                        target_grid=target_grid,
+                        target_domain_source=target_domain_source,
+                        resampling=resampling,
+                        report=report,
+                        accumulation_mode=accumulation_mode,
+                        accumulation_hours=accumulation_hours,
+                    )
                 rows.append(
                     _row_from_result(
                         input_path=input_path,
@@ -550,6 +821,11 @@ def batch_forecast_nc_to_xmrg(
                         target_units=target_units,
                         accumulation_mode=accumulation_mode,
                         accumulation_hours=accumulation_hours,
+                        previous_lead_hour=extra.get("previous_lead_hour"),
+                        previous_valid_time=extra.get("previous_valid_time"),
+                        negative_diff_count=extra.get("negative_diff_count"),
+                        negative_diff_min=extra.get("negative_diff_min"),
+                        diff_method=extra.get("diff_method"),
                         report=report,
                         ok=result.ok,
                         message=result.message,
@@ -558,6 +834,8 @@ def batch_forecast_nc_to_xmrg(
                 )
                 if not result.ok and not continue_on_error:
                     break
+                if accumulation_mode == "total-since-init":
+                    previous_selected_lead = lead
             except Exception as exc:
                 rows.append(
                     _row_from_result(
@@ -575,6 +853,9 @@ def batch_forecast_nc_to_xmrg(
                         target_units=target_units,
                         accumulation_mode=accumulation_mode,
                         accumulation_hours=accumulation_hours,
+                        previous_lead_hour=previous_lead.hour if previous_lead else None,
+                        previous_valid_time=previous_valid_time,
+                        diff_method="current_minus_previous_lead" if previous_lead else "first_selected_lead_direct",
                         report=report,
                         ok=False,
                         message=str(exc),
