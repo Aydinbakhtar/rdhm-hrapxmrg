@@ -618,6 +618,8 @@ def cmd_batch_forecast_nc_to_xmrg(args: argparse.Namespace) -> int:
             member_prefix=args.member_prefix,
             accumulation_mode=args.accumulation_mode,
             accumulation_hours=args.accumulation_hours,
+            allow_negative_diff=args.allow_negative_diff,
+            negative_diff_tolerance=args.negative_diff_tolerance,
             resampling=args.resampling,
             summary=args.summary,
             report_dir=args.report_dir,
@@ -981,6 +983,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--member-prefix", default="member")
     p.add_argument("--accumulation-mode", choices=["step", "rate", "total-since-init"], default="step")
     p.add_argument("--accumulation-hours", type=float, default=None)
+    p.add_argument("--allow-negative-diff", action="store_true")
+    p.add_argument("--negative-diff-tolerance", type=float, default=1e-6)
     p.add_argument("--resampling", choices=["nearest", "bilinear", "cubic", "average"], default="bilinear")
     p.add_argument("--summary", type=Path, default=None)
     p.add_argument("--report-dir", type=Path, default=None)

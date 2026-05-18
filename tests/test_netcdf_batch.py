@@ -76,6 +76,36 @@ def _forecast_dataset(
     return grid, path
 
 
+def _cumulative_dataset(
+    path: Path,
+    *,
+    leads: tuple[int, ...],
+    cumulative_by_member: dict[int, list[float]],
+) -> tuple[TargetGrid, Path]:
+    xr = _xarray()
+    grid = TargetGrid(xor=341, yor=313, maxx=8, maxy=6)
+    lat, lon = _lat_lon_covering_grid(grid)
+    members = tuple(cumulative_by_member)
+    data = np.zeros((1, len(leads), len(members), len(lat), len(lon)), dtype=np.float32)
+    for member_i, member in enumerate(members):
+        values = cumulative_by_member[member]
+        assert len(values) == len(leads)
+        for lead_i, value in enumerate(values):
+            data[0, lead_i, member_i, :, :] = float(value)
+    ds = xr.Dataset(
+        {"APCP": (("init_time", "lead", "member", "lat", "lon"), data)},
+        coords={
+            "init_time": np.array(["2026-05-18T00:00:00"], dtype="datetime64[ns]"),
+            "lead": np.array(leads, dtype=np.int32),
+            "member": np.array(members, dtype=np.int32),
+            "lat": lat,
+            "lon": lon,
+        },
+    )
+    _write_netcdf(path, ds)
+    return grid, path
+
+
 def _physical(path: Path) -> np.ndarray:
     stored, _meta = read_xmrg(path)
     return np.flipud(stored) / 100.0
@@ -213,10 +243,80 @@ def test_batch_forecast_rate_precipitation(tmp_path: Path):
     assert np.nanmean(_physical(output_dir / "xmrg0518202601z.gz")) == pytest.approx(1.0, abs=0.02)
 
 
-def test_batch_forecast_total_since_init_rejected(tmp_path: Path):
-    grid, path = _forecast_dataset(tmp_path / "forecast.nc", leads=(1,), members=(0,))
+def test_batch_forecast_total_since_init_rejects_temperature(tmp_path: Path):
+    grid, path = _forecast_dataset(tmp_path / "tair.nc", variable="T2M", leads=(1,), members=(0,))
 
-    with pytest.raises(ValueError, match="total-since-init precipitation requires adjacent-lead differencing"):
+    with pytest.raises(ValueError, match="total-since-init accumulation mode is only valid"):
+        batch_forecast_nc_to_xmrg(
+            input_path=path,
+            nc_variable="T2M",
+            variable="tair",
+            source_units="K",
+            target_units="F",
+            output_dir=tmp_path / "out",
+            init_time="2026-05-18T00:00:00",
+            all_leads=True,
+            target_grid=grid,
+            accumulation_mode="total-since-init",
+        )
+
+
+def test_total_since_init_basic_hourly_differencing(tmp_path: Path):
+    grid, path = _cumulative_dataset(tmp_path / "cumulative.nc", leads=(1, 2, 3), cumulative_by_member={0: [1, 3, 6]})
+    output_dir = tmp_path / "out"
+    summary = tmp_path / "summary.csv"
+
+    result = batch_forecast_nc_to_xmrg(
+        input_path=path,
+        nc_variable="APCP",
+        variable="prep",
+        source_units="mm",
+        target_units="mm",
+        output_dir=output_dir,
+        init_time="2026-05-18T00:00:00",
+        all_leads=True,
+        target_grid=grid,
+        accumulation_mode="total-since-init",
+        summary=summary,
+        resampling="nearest",
+    )
+
+    assert result["ok"]
+    assert np.nanmean(_physical(output_dir / "xmrg0518202601z.gz")) == pytest.approx(1.0, abs=0.02)
+    assert np.nanmean(_physical(output_dir / "xmrg0518202602z.gz")) == pytest.approx(2.0, abs=0.02)
+    assert np.nanmean(_physical(output_dir / "xmrg0518202603z.gz")) == pytest.approx(3.0, abs=0.02)
+    rows = _read_summary(summary)
+    assert rows[1]["previous_lead_hour"] == "1.0"
+    assert rows[1]["diff_method"] == "current_minus_previous_lead"
+
+
+def test_total_since_init_uses_lead_zero_for_first_selected_lead(tmp_path: Path):
+    grid, path = _cumulative_dataset(tmp_path / "cumulative.nc", leads=(0, 1, 2), cumulative_by_member={0: [0, 5, 8]})
+    output_dir = tmp_path / "out"
+
+    result = batch_forecast_nc_to_xmrg(
+        input_path=path,
+        nc_variable="APCP",
+        variable="prep",
+        source_units="mm",
+        target_units="mm",
+        output_dir=output_dir,
+        init_time="2026-05-18T00:00:00",
+        lead_hours="1,2",
+        target_grid=grid,
+        accumulation_mode="total-since-init",
+        resampling="nearest",
+    )
+
+    assert result["ok"]
+    assert np.nanmean(_physical(output_dir / "xmrg0518202601z.gz")) == pytest.approx(5.0, abs=0.02)
+    assert np.nanmean(_physical(output_dir / "xmrg0518202602z.gz")) == pytest.approx(3.0, abs=0.02)
+
+
+def test_total_since_init_negative_diff_raises(tmp_path: Path):
+    grid, path = _cumulative_dataset(tmp_path / "negative.nc", leads=(1, 2), cumulative_by_member={0: [5, 4]})
+
+    with pytest.raises(ValueError, match="difference is negative beyond tolerance"):
         batch_forecast_nc_to_xmrg(
             input_path=path,
             nc_variable="APCP",
@@ -228,7 +328,62 @@ def test_batch_forecast_total_since_init_rejected(tmp_path: Path):
             all_leads=True,
             target_grid=grid,
             accumulation_mode="total-since-init",
+            resampling="nearest",
         )
+
+
+def test_total_since_init_negative_diff_with_allow_clamps_to_zero(tmp_path: Path):
+    grid, path = _cumulative_dataset(tmp_path / "tiny_negative.nc", leads=(1, 2), cumulative_by_member={0: [5, 4.999999]})
+    output_dir = tmp_path / "out"
+
+    result = batch_forecast_nc_to_xmrg(
+        input_path=path,
+        nc_variable="APCP",
+        variable="prep",
+        source_units="mm",
+        target_units="mm",
+        output_dir=output_dir,
+        init_time="2026-05-18T00:00:00",
+        all_leads=True,
+        target_grid=grid,
+        accumulation_mode="total-since-init",
+        allow_negative_diff=True,
+        negative_diff_tolerance=1e-6,
+        resampling="nearest",
+    )
+
+    assert result["ok"]
+    assert np.nanmin(_physical(output_dir / "xmrg0518202602z.gz")) >= 0.0
+
+
+def test_total_since_init_all_members_differenced_independently(tmp_path: Path):
+    grid, path = _cumulative_dataset(
+        tmp_path / "members.nc",
+        leads=(1, 2),
+        cumulative_by_member={0: [1, 3], 1: [10, 13]},
+    )
+    output_dir = tmp_path / "out"
+
+    result = batch_forecast_nc_to_xmrg(
+        input_path=path,
+        nc_variable="APCP",
+        variable="prep",
+        source_units="mm",
+        target_units="mm",
+        output_dir=output_dir,
+        init_time="2026-05-18T00:00:00",
+        all_leads=True,
+        all_members=True,
+        target_grid=grid,
+        accumulation_mode="total-since-init",
+        resampling="nearest",
+    )
+
+    assert result["ok"]
+    assert (output_dir / "member_000" / "xmrg0518202601z.gz").exists()
+    assert (output_dir / "member_001" / "xmrg0518202602z.gz").exists()
+    assert np.nanmean(_physical(output_dir / "member_000" / "xmrg0518202602z.gz")) == pytest.approx(2.0, abs=0.02)
+    assert np.nanmean(_physical(output_dir / "member_001" / "xmrg0518202602z.gz")) == pytest.approx(3.0, abs=0.02)
 
 
 def test_batch_forecast_dry_run_writes_planned_summary_without_outputs(tmp_path: Path):
