@@ -10,6 +10,7 @@ import numpy as np
 
 from .batch import batch_raster_to_xmrg
 from .filenames import rdhm_filename
+from .netcdf import inspect_netcdf, nc_to_xmrg
 from .pipeline import (
     ascii_to_xmrg,
     format_xmrg_report,
@@ -536,6 +537,59 @@ def cmd_batch_prism_hourly_tair(args: argparse.Namespace) -> int:
     return 0 if result["ok"] else 2
 
 
+def cmd_nc_info(args: argparse.Namespace) -> int:
+    print(
+        json.dumps(
+            inspect_netcdf(
+                args.input,
+                sample_stats=args.sample_stats,
+                max_subdatasets=args.max_subdatasets,
+            ),
+            indent=2,
+        )
+    )
+    return 0
+
+
+def cmd_nc_to_xmrg(args: argparse.Namespace) -> int:
+    target_grid, target_domain_source = _target_grid_and_source_from_target_args(args)
+    try:
+        result = nc_to_xmrg(
+            input_path=args.input,
+            nc_variable=args.nc_variable,
+            output_xmrg=args.output,
+            output_dir=args.output_dir,
+            variable=args.variable,
+            date_value=args.date,
+            hour=args.hour,
+            valid_time=args.valid_time,
+            daily_precip=args.daily_precip,
+            band=args.band,
+            time_index=args.time_index,
+            time_value=args.time_value,
+            init_index=args.init_index,
+            init_time=args.init_time,
+            lead_index=args.lead_index,
+            lead_hour=args.lead_hour,
+            member_index=args.member_index,
+            member_name=args.member_name,
+            source_units=args.source_units,
+            target_units=args.target_units,
+            target_grid=target_grid,
+            target_domain_source=target_domain_source,
+            resampling=args.resampling,
+            report=args.report,
+            accumulation_mode=args.accumulation_mode,
+            accumulation_hours=args.accumulation_hours,
+        )
+    except Exception as exc:
+        print(json.dumps({"ok": False, "message": str(exc), "details": {}}, indent=2))
+        return 2
+
+    print(json.dumps({"ok": result.ok, "message": result.message, "details": result.details}, indent=2))
+    return 0 if result.ok else 2
+
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -814,6 +868,52 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--buffer-cells", type=int, default=0)
 
     p.set_defaults(func=cmd_batch_prism_hourly_tair)
+
+    p = sub.add_parser(
+        "nc-info",
+        help="Inspect NetCDF variables, coordinates, forecast dimensions, and raster subdatasets",
+    )
+    p.add_argument("--input", required=True, type=Path)
+    p.add_argument("--sample-stats", action="store_true")
+    p.add_argument("--max-subdatasets", type=int, default=20)
+    p.set_defaults(func=cmd_nc_info)
+
+    p = sub.add_parser("nc-to-xmrg", help="Convert one selected NetCDF 2D slice to RDHM XMRG")
+    p.add_argument("--input", required=True, type=Path)
+    p.add_argument("--nc-variable", required=True)
+    p.add_argument("--variable", required=True, choices=["prep", "tair", "tmax", "tmin"])
+    p.add_argument("--source-units", required=True)
+    p.add_argument("--target-units", required=True)
+    p.add_argument("--output", type=Path, default=None)
+    p.add_argument("--output-dir", type=Path, default=None)
+    p.add_argument("--report", type=Path, default=None)
+
+    p.add_argument("--band", type=int, default=None)
+    p.add_argument("--time-index", type=int, default=None)
+    p.add_argument("--time-value", default=None)
+    p.add_argument("--valid-time", default=None)
+    p.add_argument("--init-index", type=int, default=None)
+    p.add_argument("--init-time", default=None)
+    p.add_argument("--lead-index", type=int, default=None)
+    p.add_argument("--lead-hour", type=float, default=None)
+    p.add_argument("--member-index", type=int, default=None)
+    p.add_argument("--member-name", default=None)
+
+    p.add_argument("--date", default=None)
+    p.add_argument("--hour", type=int, default=None)
+    p.add_argument("--daily-precip", action="store_true")
+    p.add_argument("--accumulation-hours", type=float, default=None)
+    p.add_argument("--accumulation-mode", choices=["step", "total-since-init", "rate"], default="step")
+    p.add_argument("--resampling", choices=["nearest", "bilinear", "cubic", "average"], default="bilinear")
+
+    p.add_argument("--target-ascii-template", type=Path, default=None)
+    p.add_argument("--target-xmrg-template", type=Path, default=None)
+    p.add_argument("--target-config", type=Path, default=None)
+    p.add_argument("--target-con", type=Path, default=None)
+    p.add_argument("--target-shp", type=Path, default=None)
+    p.add_argument("--buffer-cells", type=int, default=0)
+
+    p.set_defaults(func=cmd_nc_to_xmrg)
 
     return parser
 

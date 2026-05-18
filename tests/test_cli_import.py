@@ -119,3 +119,36 @@ def test_cli_parser_includes_batch_prism_hourly_commands():
         ]
     )
     assert tair_args.command == "batch-prism-hourly-tair"
+
+
+def test_cli_parser_has_nc_commands():
+    parser = build_parser()
+    info_args = parser.parse_args(["nc-info", "--input", "file.nc"])
+    assert info_args.command == "nc-info"
+
+    convert_args = parser.parse_args(
+        [
+            "nc-to-xmrg",
+            "--input",
+            "file.nc",
+            "--nc-variable",
+            "APCP",
+            "--time-index",
+            "0",
+            "--variable",
+            "prep",
+            "--source-units",
+            "mm",
+            "--target-units",
+            "mm",
+            "--output-dir",
+            "out",
+            "--date",
+            "2025-01-01",
+            "--hour",
+            "1",
+            "--target-config",
+            "domain.yaml",
+        ]
+    )
+    assert convert_args.command == "nc-to-xmrg"
