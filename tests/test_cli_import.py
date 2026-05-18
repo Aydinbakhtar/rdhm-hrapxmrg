@@ -152,3 +152,33 @@ def test_cli_parser_has_nc_commands():
         ]
     )
     assert convert_args.command == "nc-to-xmrg"
+
+
+def test_cli_parser_has_batch_forecast_nc_command():
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "batch-forecast-nc-to-xmrg",
+            "--input",
+            "forecast.nc",
+            "--nc-variable",
+            "APCP",
+            "--variable",
+            "prep",
+            "--source-units",
+            "mm",
+            "--target-units",
+            "mm",
+            "--output-dir",
+            "out",
+            "--init-time",
+            "2026-05-18T00:00:00",
+            "--lead-hours",
+            "1,2,3",
+            "--member-index",
+            "0",
+            "--target-config",
+            "domain.yaml",
+        ]
+    )
+    assert args.command == "batch-forecast-nc-to-xmrg"
