@@ -11,6 +11,7 @@ import numpy as np
 from .batch import batch_raster_to_xmrg
 from .filenames import rdhm_filename
 from .netcdf import inspect_netcdf, nc_to_xmrg
+from .netcdf_batch import batch_forecast_nc_to_xmrg
 from .pipeline import (
     ascii_to_xmrg,
     format_xmrg_report,
@@ -590,6 +591,48 @@ def cmd_nc_to_xmrg(args: argparse.Namespace) -> int:
     return 0 if result.ok else 2
 
 
+def cmd_batch_forecast_nc_to_xmrg(args: argparse.Namespace) -> int:
+    target_grid, target_domain_source = _target_grid_and_source_from_target_args(args)
+    try:
+        result = batch_forecast_nc_to_xmrg(
+            input_path=args.input,
+            nc_variable=args.nc_variable,
+            variable=args.variable,
+            source_units=args.source_units,
+            target_units=args.target_units,
+            output_dir=args.output_dir,
+            target_grid=target_grid,
+            target_domain_source=target_domain_source,
+            init_time=args.init_time,
+            init_index=args.init_index,
+            lead_hours=args.lead_hours,
+            lead_indices=args.lead_indices,
+            lead_start=args.lead_start,
+            lead_end=args.lead_end,
+            lead_step=args.lead_step,
+            all_leads=args.all_leads,
+            member_index=args.member_index,
+            member_name=args.member_name,
+            all_members=args.all_members,
+            member_output_mode=args.member_output_mode,
+            member_prefix=args.member_prefix,
+            accumulation_mode=args.accumulation_mode,
+            accumulation_hours=args.accumulation_hours,
+            resampling=args.resampling,
+            summary=args.summary,
+            report_dir=args.report_dir,
+            continue_on_error=args.continue_on_error,
+            dry_run=args.dry_run,
+        )
+    except Exception as exc:
+        print(json.dumps({"ok": False, "message": str(exc)}, indent=2))
+        return 2
+
+    result.pop("rows", None)
+    print(json.dumps(result, indent=2))
+    return 0 if result["ok"] else 2
+
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -914,6 +957,44 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--buffer-cells", type=int, default=0)
 
     p.set_defaults(func=cmd_nc_to_xmrg)
+
+    p = sub.add_parser("batch-forecast-nc-to-xmrg", help="Batch convert forecast NetCDF leads to RDHM XMRG")
+    p.add_argument("--input", required=True, type=Path)
+    p.add_argument("--nc-variable", required=True)
+    p.add_argument("--variable", required=True, choices=["prep", "tair", "tmax", "tmin"])
+    p.add_argument("--source-units", required=True)
+    p.add_argument("--target-units", required=True)
+    p.add_argument("--output-dir", required=True, type=Path)
+    init_group = p.add_mutually_exclusive_group(required=True)
+    init_group.add_argument("--init-time", default=None)
+    init_group.add_argument("--init-index", type=int, default=None)
+    p.add_argument("--lead-hours", default=None, help="Comma-separated lead hours, e.g. 1,2,3,6")
+    p.add_argument("--lead-indices", default=None, help="Comma-separated lead coordinate indices")
+    p.add_argument("--lead-start", type=float, default=None)
+    p.add_argument("--lead-end", type=float, default=None)
+    p.add_argument("--lead-step", type=float, default=None)
+    p.add_argument("--all-leads", action="store_true")
+    p.add_argument("--member-index", type=int, default=None)
+    p.add_argument("--member-name", default=None)
+    p.add_argument("--all-members", action="store_true")
+    p.add_argument("--member-output-mode", choices=["flat", "subdirs"], default="subdirs")
+    p.add_argument("--member-prefix", default="member")
+    p.add_argument("--accumulation-mode", choices=["step", "rate", "total-since-init"], default="step")
+    p.add_argument("--accumulation-hours", type=float, default=None)
+    p.add_argument("--resampling", choices=["nearest", "bilinear", "cubic", "average"], default="bilinear")
+    p.add_argument("--summary", type=Path, default=None)
+    p.add_argument("--report-dir", type=Path, default=None)
+    p.add_argument("--continue-on-error", action="store_true")
+    p.add_argument("--dry-run", action="store_true")
+
+    p.add_argument("--target-ascii-template", type=Path, default=None)
+    p.add_argument("--target-xmrg-template", type=Path, default=None)
+    p.add_argument("--target-config", type=Path, default=None)
+    p.add_argument("--target-con", type=Path, default=None)
+    p.add_argument("--target-shp", type=Path, default=None)
+    p.add_argument("--buffer-cells", type=int, default=0)
+
+    p.set_defaults(func=cmd_batch_forecast_nc_to_xmrg)
 
     return parser
 
